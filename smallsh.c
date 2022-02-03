@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <math.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
@@ -32,6 +33,7 @@ struct command {
 /* Function Prototypes */
 int get_command(struct command *user_command);
 void reset_command(struct command *user_command);
+char *expand_variable(char *unexpanded_string);
 
 /* Main */
 int main(void) {
@@ -51,7 +53,6 @@ int main(void) {
     }
 
     reset_command(&user_command);
-
   }
   return 0;
 }
@@ -83,6 +84,7 @@ int get_command(struct command *user_command) {
   // Parse user input and store information
   bool first_token = true;
   char *token;
+  char *expanded_token;
   char *save_ptr = input_buffer;
   token = strtok_r(input_buffer, " \n", &save_ptr);
   user_command->arguments = (char *)calloc(MAX_COMMAND_LENGTH, sizeof(char));
@@ -92,12 +94,12 @@ int get_command(struct command *user_command) {
     // Input Redirection
     if (strcmp(token, "<") == 0) {
       token = strtok_r(NULL, " \n", &save_ptr);
-      user_command->input_file = strdup(token);
+      user_command->input_file = expand_variable(token);
 
     // Output Redirection
     } else if (strcmp(token, ">") == 0) {
       token = strtok_r(NULL, " \n", &save_ptr);
-      user_command->output_file = strdup(token);
+      user_command->output_file = expand_variable(token);
 
     // Run in the background
     } else if (strcmp(token, "&") == 0) {
@@ -106,14 +108,17 @@ int get_command(struct command *user_command) {
     // Command arguments
     } else {
 
+      expanded_token = expand_variable(token);
+
       // Add space in between arguments except for the first one
       if (first_token) {
-        strcpy(user_command->arguments, token);
+        strcpy(user_command->arguments, expanded_token);
         first_token = false;
-
       } else {
-        sprintf(user_command->arguments, "%s %s", user_command->arguments, token);
+        sprintf(user_command->arguments, "%s %s", user_command->arguments, expanded_token);
       }
+
+      free(expanded_token);
     }
 
     token = strtok_r(NULL, " \n", &save_ptr);
@@ -146,4 +151,48 @@ void reset_command(struct command *user_command) {
   user_command->output_file = NULL;
 
   user_command->is_background = false;
+}
+
+/*
+ * Function: expand_variable
+ * -----------------------------------------------------------------------------
+ * Get a pointer to a string as parameter,
+ *   replace all instances of "$$" with the process ID of the program.
+ * Reallocate enough memory for the new string as necessary.
+ */
+
+char *expand_variable(char *unexpanded_string) {
+
+  int num_digits_pid = floor(log10(getpid())) + 1;
+  int variable_start;
+  char *expanded_string = NULL;
+  char *current_string = calloc(strlen(unexpanded_string), sizeof(char));
+  strcpy(current_string, unexpanded_string);
+  variable_start = strstr(current_string, "$$") - current_string;
+
+  while (variable_start >= 0 && variable_start < strlen(current_string)) {
+
+    // Substring on the left of $$
+    char expanded_string_left[variable_start+1];
+    strncpy(expanded_string_left, "", sizeof(expanded_string_left));
+    strncpy(expanded_string_left, current_string, variable_start);
+
+    // Substring on the right of $$
+    char expanded_string_right[strlen(current_string) - variable_start - 1];
+    strncpy(expanded_string_right, "", sizeof(expanded_string_right));
+    strncpy(expanded_string_right, current_string + variable_start + 2, strlen(current_string) - variable_start - 2);
+
+    // Create expanded string
+    int length_expanded_string = strlen(current_string) + num_digits_pid - 1;
+    if (expanded_string) {
+      free(expanded_string);
+    }
+    expanded_string = calloc(length_expanded_string, sizeof(char));
+    sprintf(expanded_string, "%s%d%s", expanded_string_left, getpid(), expanded_string_right);
+
+    current_string = expanded_string;
+    variable_start = strstr(current_string, "$$") - current_string;
+  };
+  
+  return current_string;
 }
