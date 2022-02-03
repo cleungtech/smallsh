@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
@@ -14,16 +15,15 @@
 /* Structs */
 /* Struct: command
  * -----------------------------------------------------------------------------
- * Struct that represent user's command
- *   argc - number of command line arguments (stored in argv)
- *   argv - points to the array of command line arguments 
+ * Struct that represent user's command.
+ *   arguments - points the command line arguments, 
+ *               except for input/output redirection and background process.
  *   input_file - filename of input file for input redirection
  *   output_file - filename of output file for output redirection
  *   is_background - True if the process should be ran in the background. False otherwise.
  */
 struct command {
-  unsigned int argc;
-  char *argv[MAX_ARGS];
+  char *arguments;
   char *input_file;
   char *output_file;
   bool is_background;
@@ -31,26 +31,28 @@ struct command {
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
+void reset_command(struct command *user_command);
 
 /* Main */
 int main(void) {
 
   bool exit_program = false;
   struct command user_command;
+  reset_command(&user_command);
   
   while (!exit_program) {
 
     if (get_command(&user_command) == SUCCESS) {
-      for (int i = 0; i < user_command.argc; i++) {
-        printf("user_command.command_argv[%d]: %s\n", i, user_command.argv[i]);
-      }
-      printf("user_command.command_argv: %d\n", user_command.argc);
+
+      printf("user_command.arguments: %s\n", user_command.arguments);
       printf("user_command.output_file: %s\n", user_command.output_file);
       printf("user_command.input_file: %s\n", user_command.input_file);
       printf("user_command.is_background: %d\n", user_command.is_background);
-    };    
+    }
+
+    reset_command(&user_command);
+
   }
-  
   return 0;
 }
 
@@ -58,7 +60,7 @@ int main(void) {
  * Function: get_command
  * -----------------------------------------------------------------------------
  * Prompt user for a command input, parse it, and 
- * Store the information in the given pointer to a struct command (user_command)
+ *   store the information in the given pointer to user_command.
  * Returns SUCCESS (0) if the command has be parsed and saved in user_command
  * Returns FAILURE (-1) if the user input is blank or a command.
  */
@@ -70,58 +72,78 @@ int get_command(struct command *user_command) {
   size_t input_size = MAX_COMMAND_LENGTH;
   getline(&input_buffer, &input_size, stdin);
 
-  // Clear previous command
-  int i = 0;
-  while (user_command->argv[i]) {
-    user_command->argv[i] = NULL;
-    i++;
+  // Handle comment or blank input
+  bool is_comment = strncmp(input_buffer, "#", 1) == 0;
+  bool is_blank_line = strncmp(input_buffer, "\n", 1) == 0;
+  if (is_comment || is_blank_line) {
+    free(input_buffer);
+    return FAILURE;
   }
-  user_command->argc = 0;
-  user_command->input_file = NULL;
-  user_command->output_file = NULL;
-  user_command->is_background = false;
 
   // Parse user input and store information
+  bool first_token = true;
   char *token;
   char *save_ptr = input_buffer;
-  int arg_index = 0;
-  token = strtok_r(input_buffer, " ", &save_ptr);
+  token = strtok_r(input_buffer, " \n", &save_ptr);
+  user_command->arguments = (char *)calloc(MAX_COMMAND_LENGTH, sizeof(char));
+
   while (token != NULL) {
 
     // Input Redirection
     if (strcmp(token, "<") == 0) {
-      token = strtok_r(NULL, " ", &save_ptr);
+      token = strtok_r(NULL, " \n", &save_ptr);
       user_command->input_file = strdup(token);
-      arg_index++;
 
     // Output Redirection
     } else if (strcmp(token, ">") == 0) {
-      token = strtok_r(NULL, " ", &save_ptr);
+      token = strtok_r(NULL, " \n", &save_ptr);
       user_command->output_file = strdup(token);
-      arg_index++;
 
     // Run in the background
-    } else if (strcmp(token, "&\n") == 0) {
+    } else if (strcmp(token, "&") == 0) {
       user_command->is_background = true;
 
     // Command arguments
-    } else if (strcmp(token, "\n") != 0){
-      user_command->argv[arg_index] = strdup(token);
-      user_command->argc++;
+    } else {
+
+      // Add space in between arguments except for the first one
+      if (first_token) {
+        strcpy(user_command->arguments, token);
+        first_token = false;
+
+      } else {
+        sprintf(user_command->arguments, "%s %s", user_command->arguments, token);
+      }
     }
 
-    token = strtok_r(NULL, " ", &save_ptr);
-    arg_index++;
+    token = strtok_r(NULL, " \n", &save_ptr);
   }
-  user_command->argv[arg_index] = NULL;
   free(input_buffer);
 
-  // Handle comment or blank input
-  bool is_comment = strncmp(user_command->argv[0], "#", 1) == 0;
-  bool is_blank_line = user_command->argc == 1 && 
-                       strcmp(user_command->argv[0], "\n") == 0;
-  if (is_comment || is_blank_line) {
-    return FAILURE;
-  }
   return SUCCESS;
+}
+
+/*
+ * Function: reset_command
+ * -----------------------------------------------------------------------------
+ * Get a pointer to a struct command (user_command) as parameter,
+ *   free all memory if they are allocated, 
+ *   set arguments, input_file, and output_file to NULL, 
+ *   and is_background to false.
+ */
+void reset_command(struct command *user_command) {
+
+  if (!user_command->arguments)
+    free(user_command->arguments);
+  user_command->arguments = NULL;
+    
+  if (!user_command->input_file)
+    free(user_command->input_file);
+  user_command->input_file = NULL;
+    
+  if (!user_command->output_file)
+    free(user_command->output_file);
+  user_command->output_file = NULL;
+
+  user_command->is_background = false;
 }
