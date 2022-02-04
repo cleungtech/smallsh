@@ -37,6 +37,10 @@ int get_command(struct command *user_command);
 void reset_command(struct command *user_command);
 char *expand_variable(char *unexpanded_string);
 void execute_command(struct command *user_command, int *status, bool *exit_program);
+void report_status(int *status);
+void change_directory(char *cd_arguments);
+void exit_and_cleanup(bool *exit_program);
+
 
 /* Main */
 int main(void) {
@@ -51,13 +55,8 @@ int main(void) {
     if (get_command(&user_command) == SUCCESS)
       execute_command(&user_command, &status, &exit_program);
 
-    printf("arguments: %s\ninput: %s\noutput: %s\nbg: %i\n", 
-           user_command.arguments, user_command.input_file, user_command.output_file, user_command.is_background);
-
     reset_command(&user_command);
   }
-  printf("arguments: %s\ninput: %s\noutput: %s\nbg: %i\n", 
-         user_command.arguments, user_command.input_file, user_command.output_file, user_command.is_background);
   return 0;
 }
 
@@ -213,16 +212,62 @@ char *expand_variable(char *unexpanded_string) {
 void execute_command(struct command *user_command, int *status, bool *exit_program) {
   
   if (strcmp(user_command->arguments, "status") == 0) {
-    printf("exit value %d\n", *status);
-    fflush(stdout);
+    report_status(status);
 
-  } else if (strcmp(user_command->arguments, "cd") == 0) {
-    printf("executing cd...\n");
+  } else if (strncmp(user_command->arguments, "cd", 2) == 0) {
+    change_directory(user_command->arguments);
 
   } else if (strcmp(user_command->arguments, "exit") == 0) {
-    *exit_program = true;
+    exit_and_cleanup(exit_program);
 
   } else {
     printf("creating new process for execution ...\n");
   }
+}
+
+/*
+ * Function: change_directory
+ * -----------------------------------------------------------------------------
+ * Take a pointer to the change directory arguments string and
+ *   change the current working directory.
+ * If there is no argument after cd, 
+ *   it will change the current working directory to the home directory.
+ * Otherwise, it will change it to the first argument after cd.
+ */
+
+void change_directory(char *cd_arguments) {
+
+  char *path;
+  path = strtok(cd_arguments, " ");
+  path = strtok(NULL, " ");
+
+  if (!path) {
+    path = getenv("HOME");
+  }
+
+  chdir(path);
+}
+
+/*
+ * Function: report_status
+ * -----------------------------------------------------------------------------
+ * Take a pointer to and report the exit status or terminating signal of 
+ *   the last foregound process.
+ */
+
+void report_status(int *status) {
+
+  printf("exit value %d\n", *status);
+  fflush(stdout);
+}
+
+/*
+ * Function: exit_and_cleanup
+ * -----------------------------------------------------------------------------
+ * Take a pointer to exit_program flag and change it to true.
+ */
+
+void exit_and_cleanup(bool *exit_program) {
+
+  *exit_program = true;
 }
