@@ -3,3 +3,6 @@ setup:
 
 clean:
 	rm smallsh
+
+test:
+	./testscript > testresults.txt 2>&1
