@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <math.h>
 #include <signal.h>
+#include <limits.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
@@ -35,9 +36,7 @@ struct command {
 int get_command(struct command *user_command);
 void reset_command(struct command *user_command);
 char *expand_variable(char *unexpanded_string);
-void execute_command(struct command *user_command, int *status);
-void exit_smallsh(void);
-void report_status(int *status);
+void execute_command(struct command *user_command, int *status, bool *exit_program);
 
 /* Main */
 int main(void) {
@@ -50,10 +49,15 @@ int main(void) {
   while (!exit_program) {
 
     if (get_command(&user_command) == SUCCESS)
-      execute_command(&user_command, &status);
+      execute_command(&user_command, &status, &exit_program);
+
+    printf("arguments: %s\ninput: %s\noutput: %s\nbg: %i\n", 
+           user_command.arguments, user_command.input_file, user_command.output_file, user_command.is_background);
 
     reset_command(&user_command);
   }
+  printf("arguments: %s\ninput: %s\noutput: %s\nbg: %i\n", 
+         user_command.arguments, user_command.input_file, user_command.output_file, user_command.is_background);
   return 0;
 }
 
@@ -206,32 +210,19 @@ char *expand_variable(char *unexpanded_string) {
  *   execute status, cd, and exit commands in the foreground.
  *   Create a new process and execute for other commands.
  */
-void execute_command(struct command *user_command, int *status) {
+void execute_command(struct command *user_command, int *status, bool *exit_program) {
   
   if (strcmp(user_command->arguments, "status") == 0) {
-    report_status(status);
+    printf("exit value %d\n", *status);
+    fflush(stdout);
 
   } else if (strcmp(user_command->arguments, "cd") == 0) {
     printf("executing cd...\n");
 
   } else if (strcmp(user_command->arguments, "exit") == 0) {
-    printf("executing exit...\n");
+    *exit_program = true;
 
   } else {
     printf("creating new process for execution ...\n");
   }
-
-}
-
-/*
- * Function: report_status
- * -----------------------------------------------------------------------------
- * Take a pointer to status variable and 
- *   report the exit status or the terminating signal of 
- *   the last foregound process.
- */
-void report_status(int *status) {
-
-  printf("exit value %d\n", *status);
-  fflush(stdout);
 }
