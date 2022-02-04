@@ -8,6 +8,7 @@
 #include <math.h>
 #include <signal.h>
 #include <limits.h>
+#include <sys/wait.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
@@ -294,13 +295,19 @@ int fork_and_execute(struct command *user_command, int *status) {
       exit(FAILURE);
 
     case 0:
-      execvp(user_command->arguments[0], user_command->arguments);
-		  perror("execvp");
+
+      if (execvp(user_command->arguments[0], user_command->arguments) < 0) {
+        exit(FAILURE);
+      }
+		  
       exit(SUCCESS);
 
     default:
       waitpid(spwan_pid, &child_exit_method, user_command->background);
-      
+
+      if (WIFEXITED(child_exit_method))
+        *status = WEXITSTATUS(child_exit_method);
+
   }
   return SUCCESS;
 }
