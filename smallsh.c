@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <math.h>
+#include <signal.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
@@ -34,23 +35,22 @@ struct command {
 int get_command(struct command *user_command);
 void reset_command(struct command *user_command);
 char *expand_variable(char *unexpanded_string);
+void execute_command(struct command *user_command, int *status);
+void exit_smallsh(void);
+void report_status(int *status);
 
 /* Main */
 int main(void) {
 
   bool exit_program = false;
+  int status = 0;
   struct command user_command;
   reset_command(&user_command);
   
   while (!exit_program) {
 
-    if (get_command(&user_command) == SUCCESS) {
-
-      printf("user_command.arguments: %s\n", user_command.arguments);
-      printf("user_command.output_file: %s\n", user_command.output_file);
-      printf("user_command.input_file: %s\n", user_command.input_file);
-      printf("user_command.is_background: %d\n", user_command.is_background);
-    }
+    if (get_command(&user_command) == SUCCESS)
+      execute_command(&user_command, &status);
 
     reset_command(&user_command);
   }
@@ -69,6 +69,8 @@ int get_command(struct command *user_command) {
 
   // Prompt for command
   printf(": ");
+  fflush(stdout);
+
   char *input_buffer = (char *)calloc(MAX_COMMAND_LENGTH, sizeof(char));
   size_t input_size = MAX_COMMAND_LENGTH;
   getline(&input_buffer, &input_size, stdin);
@@ -195,4 +197,41 @@ char *expand_variable(char *unexpanded_string) {
   };
   
   return current_string;
+}
+
+/*
+ * Function: execute_command
+ * -----------------------------------------------------------------------------
+ * Take a pointer to user_command and status variable and 
+ *   execute status, cd, and exit commands in the foreground.
+ *   Create a new process and execute for other commands.
+ */
+void execute_command(struct command *user_command, int *status) {
+  
+  if (strcmp(user_command->arguments, "status") == 0) {
+    report_status(status);
+
+  } else if (strcmp(user_command->arguments, "cd") == 0) {
+    printf("executing cd...\n");
+
+  } else if (strcmp(user_command->arguments, "exit") == 0) {
+    printf("executing exit...\n");
+
+  } else {
+    printf("creating new process for execution ...\n");
+  }
+
+}
+
+/*
+ * Function: report_status
+ * -----------------------------------------------------------------------------
+ * Take a pointer to status variable and 
+ *   report the exit status or the terminating signal of 
+ *   the last foregound process.
+ */
+void report_status(int *status) {
+
+  printf("exit value %d\n", *status);
+  fflush(stdout);
 }
