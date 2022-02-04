@@ -13,49 +13,51 @@
 #define MAX_COMMAND_LENGTH 2048
 #define MAX_ARGS 512
 #define SUCCESS 0
-#define FAILURE -1
+#define FAILURE 1
 
 /* Structs */
 /* Struct: command
  * -----------------------------------------------------------------------------
  * Struct that represent user's command.
- *   arguments - points the command line arguments, 
+ *   arguments - points an array of command line arguments, 
  *               except for input/output redirection and background process.
  *   input_file - filename of input file for input redirection
  *   output_file - filename of output file for output redirection
- *   is_background - True if the process should be ran in the background. False otherwise.
+ *   background - if the process should be in the background
+ *                  WNOHANG for background process
+ *                  0 for foreground process
  */
 struct command {
-  char *arguments;
+  char *arguments[MAX_ARGS];
   char *input_file;
   char *output_file;
-  bool is_background;
+  int background;
 };
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
-void reset_command(struct command *user_command);
+void reset_command(struct command *user_command, bool reset_command);
 char *expand_variable(char *unexpanded_string);
 void execute_command(struct command *user_command, int *status, bool *exit_program);
 void report_status(int *status);
-void change_directory(char *cd_arguments);
-void exit_and_cleanup(bool *exit_program);
+void change_directory(struct command *user_command);
+void exit_and_cleanup(struct command *user_command, bool *exit_program);
+int fork_and_execute(struct command *user_command, int *status);
 
 
 /* Main */
 int main(void) {
 
   bool exit_program = false;
-  int status = 0;
+  int status = SUCCESS;
   struct command user_command;
-  reset_command(&user_command);
+  reset_command(&user_command, true);
   
   while (!exit_program) {
 
     if (get_command(&user_command) == SUCCESS)
       execute_command(&user_command, &status, &exit_program);
 
-    reset_command(&user_command);
   }
   return 0;
 }
@@ -66,9 +68,11 @@ int main(void) {
  * Prompt user for a command input, parse it, and 
  *   store the information in the given pointer to user_command.
  * Returns SUCCESS (0) if the command has be parsed and saved in user_command
- * Returns FAILURE (-1) if the user input is blank or a command.
+ * Returns FAILURE (1) if the user input is blank or a command.
  */
 int get_command(struct command *user_command) {
+
+  reset_command(user_command, false);
 
   // Prompt for command
   printf(": ");
@@ -87,12 +91,10 @@ int get_command(struct command *user_command) {
   }
 
   // Parse user input and store information
-  bool first_token = true;
+  int arg_index = 0;
   char *token;
-  char *expanded_token;
   char *save_ptr = input_buffer;
   token = strtok_r(input_buffer, " \n", &save_ptr);
-  user_command->arguments = (char *)calloc(MAX_COMMAND_LENGTH, sizeof(char));
 
   while (token != NULL) {
 
@@ -108,44 +110,45 @@ int get_command(struct command *user_command) {
 
     // Run in the background
     } else if (strcmp(token, "&") == 0) {
-      user_command->is_background = true;
+      user_command->background = WNOHANG;
 
     // Command arguments
     } else {
 
-      expanded_token = expand_variable(token);
-
-      // Add space in between arguments except for the first one
-      if (first_token) {
-        strcpy(user_command->arguments, expanded_token);
-        first_token = false;
-      } else {
-        sprintf(user_command->arguments, "%s %s", user_command->arguments, expanded_token);
-      }
-
-      free(expanded_token);
+      user_command->arguments[arg_index] = expand_variable(token);
+      arg_index++;
     }
-
     token = strtok_r(NULL, " \n", &save_ptr);
   }
+  
   free(input_buffer);
-
   return SUCCESS;
 }
 
 /*
  * Function: reset_command
  * -----------------------------------------------------------------------------
- * Get a pointer to a struct command (user_command) as parameter,
- *   free all memory if they are allocated, 
- *   set arguments, input_file, and output_file to NULL, 
- *   and is_background to false.
+ * Get a pointer to user_command and initialize (boolean) as parameters,
+ *   free all memory in user_command if they are allocated, 
+ *   set all string pointers in arguments, input_file, and output_file to NULL, 
+ *   and background to 0.
  */
-void reset_command(struct command *user_command) {
+void reset_command(struct command *user_command, bool initialize) {
 
-  if (!user_command->arguments)
-    free(user_command->arguments);
-  user_command->arguments = NULL;
+  if (initialize) {
+    for (int i = 0; i < MAX_ARGS; i++) {
+      user_command->arguments[i] = NULL;
+    }
+  }
+  
+  if (!initialize) {
+    for (int i = 0; i < MAX_ARGS; i++) {
+      if (!user_command->arguments[i])
+        break;
+      free(user_command->arguments[i]);
+      user_command->arguments[i] = NULL;
+    }
+  }
     
   if (!user_command->input_file)
     free(user_command->input_file);
@@ -155,7 +158,7 @@ void reset_command(struct command *user_command) {
     free(user_command->output_file);
   user_command->output_file = NULL;
 
-  user_command->is_background = false;
+  user_command->background = 0;
 }
 
 /*
@@ -163,9 +166,9 @@ void reset_command(struct command *user_command) {
  * -----------------------------------------------------------------------------
  * Get a pointer to a string as parameter,
  *   replace all instances of "$$" with the process ID of the program.
- * Reallocate enough memory for the new string as necessary.
+ * Reallocate enough memory for the new string as necessary and
+ *   return the pointer to the expanded string.
  */
-
 char *expand_variable(char *unexpanded_string) {
 
   int num_digits_pid = floor(log10(getpid())) + 1;
@@ -205,41 +208,40 @@ char *expand_variable(char *unexpanded_string) {
 /*
  * Function: execute_command
  * -----------------------------------------------------------------------------
- * Take a pointer to user_command and status variable and 
- *   execute status, cd, and exit commands in the foreground.
- *   Create a new process and execute for other commands.
+ * Take a pointer to user_command, status variable, and 
+ *   the pointer to the exit_program (boolean) variable as parameters.
+ * Execute status, cd, and exit commands in the foreground and
+ *   create a new process and execute for other commands.
  */
 void execute_command(struct command *user_command, int *status, bool *exit_program) {
+
+  char *first_argument = user_command->arguments[0];
   
-  if (strcmp(user_command->arguments, "status") == 0) {
+  if (strcmp(first_argument, "status") == 0) {
     report_status(status);
 
-  } else if (strncmp(user_command->arguments, "cd", 2) == 0) {
-    change_directory(user_command->arguments);
+  } else if (strncmp(first_argument, "cd", 2) == 0) {
+    change_directory(user_command);
 
-  } else if (strcmp(user_command->arguments, "exit") == 0) {
-    exit_and_cleanup(exit_program);
+  } else if (strcmp(first_argument, "exit") == 0) {
+    exit_and_cleanup(user_command, exit_program);
 
   } else {
-    printf("creating new process for execution ...\n");
+    fork_and_execute(user_command, status);
   }
 }
 
 /*
  * Function: change_directory
  * -----------------------------------------------------------------------------
- * Take a pointer to the change directory arguments string and
- *   change the current working directory.
+ * Take a pointer to the user_command and change the current working directory.
  * If there is no argument after cd, 
  *   it will change the current working directory to the home directory.
  * Otherwise, it will change it to the first argument after cd.
  */
+void change_directory(struct command *user_command) {
 
-void change_directory(char *cd_arguments) {
-
-  char *path;
-  path = strtok(cd_arguments, " ");
-  path = strtok(NULL, " ");
+  char *path = user_command->arguments[1];
 
   if (!path) {
     path = getenv("HOME");
@@ -254,7 +256,6 @@ void change_directory(char *cd_arguments) {
  * Take a pointer to and report the exit status or terminating signal of 
  *   the last foregound process.
  */
-
 void report_status(int *status) {
 
   printf("exit value %d\n", *status);
@@ -264,10 +265,42 @@ void report_status(int *status) {
 /*
  * Function: exit_and_cleanup
  * -----------------------------------------------------------------------------
- * Take a pointer to exit_program flag and change it to true.
+ * Take a pointer to user_command as parameter, 
+ *   free all allocated memory and kill all child processes.
+ * Also take a pointer to exit_program flag as parameter and change it to true.
  */
+void exit_and_cleanup(struct command *user_command, bool *exit_program) {
 
-void exit_and_cleanup(bool *exit_program) {
-
+  reset_command(user_command, false);
   *exit_program = true;
+}
+
+/*
+ * Function: fork_and_execute
+ * -----------------------------------------------------------------------------
+ * Take a pointer to user_command and status as parameters, 
+ *   create a child process to execute the arguments
+ *   in the background or the foreground based on user input.
+ * Also update the last foreground process exit status appropriately.
+ */
+int fork_and_execute(struct command *user_command, int *status) {
+
+  int child_exit_method;
+  pid_t spwan_pid = fork();
+
+  switch(spwan_pid) {
+    case -1:
+      perror("fork() failed\n");
+      exit(FAILURE);
+
+    case 0:
+      execvp(user_command->arguments[0], user_command->arguments);
+		  perror("execvp");
+      exit(SUCCESS);
+
+    default:
+      waitpid(spwan_pid, &child_exit_method, user_command->background);
+      
+  }
+  return SUCCESS;
 }
