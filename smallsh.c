@@ -297,6 +297,7 @@ int fork_and_execute(struct command *user_command, int *status) {
     case 0:
 
       if (execvp(user_command->arguments[0], user_command->arguments) < 0) {
+        perror(user_command->arguments[0]);
         exit(FAILURE);
       }
 		  
@@ -304,6 +305,10 @@ int fork_and_execute(struct command *user_command, int *status) {
 
     default:
       waitpid(spwan_pid, &child_exit_method, user_command->background);
+
+      if (user_command->background)
+        printf("background pid is %d\n", spwan_pid);
+      
 
       if (WIFEXITED(child_exit_method))
         *status = WEXITSTATUS(child_exit_method);
