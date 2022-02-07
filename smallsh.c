@@ -25,41 +25,75 @@
  *   input_file - filename of input file for input redirection
  *   output_file - filename of output file for output redirection
  *   background - if the process should be in the background
- *                  WNOHANG for background process
- *                  0 for foreground process
+ *                  true for background process
+ *                  false for foreground process
  */
 struct command {
   char *arguments[MAX_ARGS];
   char *input_file;
   char *output_file;
-  int background;
+  bool background;
 };
+
+/* Struct: process
+ * -----------------------------------------------------------------------------
+ * Single node of a linked list that represent a single process.
+ *   process_id - the id of the process
+ *   next - point to the next node of the process
+ */
+struct process {
+  pid_t process_id;
+  struct process *next;
+};
+
+/* Struct: status
+ * -----------------------------------------------------------------------------
+ * Represents the current status of the program
+ *   exit_program - whether or not the program should be exited
+ *   exit_status - the exit status of the most recent foreground process,
+ *                 0 by default or the process was interruped by a signal
+ *   kill_signal - the signal that interruped the most recent foreground process,
+ *                 0 by default or the process was exited without interruption.
+ *   foreground - the process id of the most recent foreground process,
+ *                0 by default.
+ *   background - A linked list of background processes that has not
+ *                finished or reaped yet.
+ */
+struct status {
+  bool exit_program;
+  int exit_status;
+  int kill_signal;
+  pid_t foreground;
+  struct process *background;
+};
+
+/* Global Variable */
+struct status program_status = {false, SUCCESS, 0, 0, NULL};
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
 void reset_command(struct command *user_command, bool reset_command);
 char *expand_variable(char *unexpanded_string);
-void execute_command(struct command *user_command, int *status, bool *exit_program);
-void report_status(int *status);
+void execute_command(struct command *user_command);
+void report_status(void);
 void change_directory(struct command *user_command);
-void exit_and_cleanup(struct command *user_command, bool *exit_program);
-int fork_and_execute(struct command *user_command, int *status);
-
+void exit_and_cleanup(struct command *user_command);
+void fork_and_execute(struct command *user_command);
+void handle_sigchld(void);
 
 /* Main */
 int main(void) {
 
-  bool exit_program = false;
-  int status = SUCCESS;
   struct command user_command;
   reset_command(&user_command, true);
   
-  while (!exit_program) {
-
+  while (!program_status.exit_program) {
+    
     if (get_command(&user_command) == SUCCESS)
-      execute_command(&user_command, &status, &exit_program);
-
+      execute_command(&user_command);
   }
+
+  exit_and_cleanup(&user_command);
   return 0;
 }
 
@@ -111,7 +145,7 @@ int get_command(struct command *user_command) {
 
     // Run in the background
     } else if (strcmp(token, "&") == 0) {
-      user_command->background = WNOHANG;
+      user_command->background = true;
 
     // Command arguments
     } else {
@@ -132,7 +166,7 @@ int get_command(struct command *user_command) {
  * Get a pointer to user_command and initialize (boolean) as parameters,
  *   free all memory in user_command if they are allocated, 
  *   set all string pointers in arguments, input_file, and output_file to NULL, 
- *   and background to 0.
+ *   and background to false.
  */
 void reset_command(struct command *user_command, bool initialize) {
 
@@ -159,7 +193,7 @@ void reset_command(struct command *user_command, bool initialize) {
     free(user_command->output_file);
   user_command->output_file = NULL;
 
-  user_command->background = 0;
+  user_command->background = false;
 }
 
 /*
@@ -209,26 +243,25 @@ char *expand_variable(char *unexpanded_string) {
 /*
  * Function: execute_command
  * -----------------------------------------------------------------------------
- * Take a pointer to user_command, status variable, and 
- *   the pointer to the exit_program (boolean) variable as parameters.
+ * Take a pointer to user_command as parameter.
  * Execute status, cd, and exit commands in the foreground and
  *   create a new process and execute for other commands.
  */
-void execute_command(struct command *user_command, int *status, bool *exit_program) {
+void execute_command(struct command *user_command) {
 
   char *first_argument = user_command->arguments[0];
   
   if (strcmp(first_argument, "status") == 0) {
-    report_status(status);
+    report_status();
 
   } else if (strncmp(first_argument, "cd", 2) == 0) {
     change_directory(user_command);
 
   } else if (strcmp(first_argument, "exit") == 0) {
-    exit_and_cleanup(user_command, exit_program);
+    program_status.exit_program = true;
 
   } else {
-    fork_and_execute(user_command, status);
+    fork_and_execute(user_command);
   }
 }
 
@@ -257,9 +290,15 @@ void change_directory(struct command *user_command) {
  * Take a pointer to and report the exit status or terminating signal of 
  *   the last foregound process.
  */
-void report_status(int *status) {
+void report_status(void) {
 
-  printf("exit value %d\n", *status);
+  if (program_status.kill_signal) {
+    printf("terminated by signal %d\n", program_status.kill_signal);
+
+  } else {
+    printf("exit value %d\n", program_status.exit_status);
+  }
+  
   fflush(stdout);
 }
 
@@ -270,49 +309,115 @@ void report_status(int *status) {
  *   free all allocated memory and kill all child processes.
  * Also take a pointer to exit_program flag as parameter and change it to true.
  */
-void exit_and_cleanup(struct command *user_command, bool *exit_program) {
+void exit_and_cleanup(struct command *user_command) {
 
   reset_command(user_command, false);
-  *exit_program = true;
+  // TO DO: free all background processes in program_status
+  // TO DO: kill all child processes
+  // TO DO: close all file pointers
 }
 
 /*
  * Function: fork_and_execute
  * -----------------------------------------------------------------------------
- * Take a pointer to user_command and status as parameters, 
+ * Take a pointer to user_command as parameter, 
  *   create a child process to execute the arguments
  *   in the background or the foreground based on user input.
  * Also update the last foreground process exit status appropriately.
  */
-int fork_and_execute(struct command *user_command, int *status) {
+void fork_and_execute(struct command *user_command) {
 
   int child_exit_method;
   pid_t spwan_pid = fork();
 
   switch(spwan_pid) {
+
+    // Forking error
     case -1:
+
       perror("fork() failed\n");
       exit(FAILURE);
 
+    // Child process
     case 0:
 
-      if (execvp(user_command->arguments[0], user_command->arguments) < 0) {
-        perror(user_command->arguments[0]);
-        exit(FAILURE);
-      }
-		  
-      exit(SUCCESS);
-
-    default:
-      waitpid(spwan_pid, &child_exit_method, user_command->background);
-
+      execvp(user_command->arguments[0], user_command->arguments);
       if (user_command->background)
+        printf("\n");
+        fflush(stdout);
+      perror(user_command->arguments[0]);
+      exit(FAILURE);
+
+    // Parent Process
+    default:
+
+      // Creating background process
+      if (user_command->background) {
+
+        // Adding background pid to program_status
+        struct process *new_background_process = (struct process *)malloc(sizeof(struct process));
+        new_background_process->process_id = spwan_pid;
+        new_background_process->next = program_status.background;
+        program_status.background = new_background_process;
+
         printf("background pid is %d\n", spwan_pid);
-      
+        fflush(stdout);
 
-      if (WIFEXITED(child_exit_method))
-        *status = WEXITSTATUS(child_exit_method);
+        waitpid(spwan_pid, &child_exit_method, WNOHANG);
 
+        // Listen for SIGCHLD signal
+        struct sigaction sa_sigchld;
+        sa_sigchld.sa_handler = (void *)handle_sigchld;
+        sigemptyset(&sa_sigchld.sa_mask);
+        sa_sigchld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+        sigaction(SIGCHLD, &sa_sigchld, NULL);
+        
+      // Creating foreground process
+      } else {
+
+        // Adding foreground pid to program_status
+        program_status.foreground = spwan_pid;
+        waitpid(spwan_pid, &child_exit_method, 0);
+
+        // Normal exit
+        if (WIFEXITED(child_exit_method)) {
+          program_status.exit_status = WEXITSTATUS(child_exit_method);
+          program_status.kill_signal = 0;
+
+        // Exited by interruption
+        } else {
+          program_status.kill_signal = WTERMSIG(child_exit_method);
+          program_status.exit_status = 0;
+          report_status();
+        }
+      }
   }
-  return SUCCESS;
+}
+
+/*
+ * Function: handle_sigchld
+ * -----------------------------------------------------------------------------
+ * Listen and handle SIGCHLD signals returned by the background processes.
+ * Also report exit value or termination signals.
+ */
+void handle_sigchld(void) {
+
+  pid_t pid;
+  int exit_method;
+  while ((pid = waitpid(-1, &exit_method, WNOHANG)) > 0) {
+
+    // Background process
+    if (pid != program_status.foreground) {
+      printf("\nbackground pid %d is done: ", pid);
+
+      // Normal exit
+      if (WEXITSTATUS(exit_method)) {
+        printf("exit value %d\n", WEXITSTATUS(exit_method));
+
+      // Exited by interruption
+      } else {
+        printf("terminated by signal %d\n", WTERMSIG(exit_method));
+      }
+    }
+  }
 }
