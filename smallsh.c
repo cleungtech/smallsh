@@ -69,6 +69,7 @@ struct status {
 
 /* Global Variable */
 struct status program_status = {false, SUCCESS, 0, 0, NULL};
+struct sigaction sa_sigint = {0};
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
@@ -83,6 +84,10 @@ void handle_sigchld(void);
 
 /* Main */
 int main(void) {
+
+  // Listen and ignore for SIGCHLD signal
+  sa_sigint.sa_handler = SIG_IGN;
+	sigaction(SIGINT, &sa_sigint, NULL);
 
   struct command user_command;
   reset_command(&user_command, true);
@@ -326,7 +331,7 @@ void exit_and_cleanup(struct command *user_command) {
  * Also update the last foreground process exit status appropriately.
  */
 void fork_and_execute(struct command *user_command) {
-
+  
   int child_exit_method;
   pid_t spwan_pid = fork();
 
@@ -341,17 +346,20 @@ void fork_and_execute(struct command *user_command) {
     // Child process
     case 0:
 
+      // Listen and handle SIGCHLD for foreground process
+      if (!user_command->background) {
+        sa_sigint.sa_handler = SIG_DFL;
+        sigaction(SIGINT, &sa_sigint, NULL);
+      }
+      
       execvp(user_command->arguments[0], user_command->arguments);
-      if (user_command->background)
-        printf("\n");
-        fflush(stdout);
       perror(user_command->arguments[0]);
       exit(FAILURE);
 
     // Parent Process
     default:
 
-      // Creating background process
+      // Background process
       if (user_command->background) {
 
         // Adding background pid to program_status
@@ -372,9 +380,9 @@ void fork_and_execute(struct command *user_command) {
         sa_sigchld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
         sigaction(SIGCHLD, &sa_sigchld, NULL);
         
-      // Creating foreground process
+      // Foreground process
       } else {
-
+        
         // Adding foreground pid to program_status
         program_status.foreground = spwan_pid;
         waitpid(spwan_pid, &child_exit_method, 0);
