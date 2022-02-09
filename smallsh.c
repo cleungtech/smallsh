@@ -85,10 +85,11 @@ void report_status(void);
 void change_directory(struct command *user_command);
 void exit_and_cleanup(struct command *user_command);
 void fork_and_execute(struct command *user_command);
-void push_background_process(int process_id);
-bool pop_background_process(int process_id);
 void handle_sigchld(int signal);
 void handle_sigtstp(int signal);
+void push_background_process(int process_id);
+bool pop_background_process(int process_id);
+void reentrant_write_integer(int num);
 
 /* Main */
 int main(void) {
@@ -308,13 +309,15 @@ void change_directory(struct command *user_command) {
 void report_status(void) {
 
   if (program_status.kill_signal) {
-    printf("terminated by signal %d\n", program_status.kill_signal);
+    write(STDOUT_FILENO, "terminated by signal ", 21);
+    reentrant_write_integer(program_status.kill_signal);
 
   } else {
-    printf("exit value %d\n", program_status.exit_status);
+    write(STDOUT_FILENO, "exit value ", 11);
+    reentrant_write_integer(program_status.exit_status);
   }
-  
-  fflush(stdout);
+
+  write(STDOUT_FILENO, "\n", 1);
 }
 
 /*
@@ -421,18 +424,25 @@ void handle_sigchld(int signal) {
     // Background process
     if (pop_background_process(pid)) {
 
-      printf("\nbackground pid %d is done: ", pid);
-\ 
       // Normal exit
-      if (WIFEXITED(exit_method))
-        printf("exit value %d\n", WEXITSTATUS(exit_method));
+      if (WIFEXITED(exit_method)) {
+        write(STDOUT_FILENO, "\nbackground pid ", 16);
+        reentrant_write_integer(pid);
+        write(STDOUT_FILENO, " is done: ", 10);
+        write(STDOUT_FILENO, "exit value ", 11);
+        reentrant_write_integer(WEXITSTATUS(exit_method));
+        write(STDOUT_FILENO, "\n: ", 3);
+      }
 
       // Exited by interruption
-      if (WIFSIGNALED(exit_method))
-        printf("terminated by signal %d\n", WTERMSIG(exit_method));
-
-      char *message = ": ";
-      write(STDOUT_FILENO, message, 3);
+      if (WIFSIGNALED(exit_method)) {
+        write(STDOUT_FILENO, "background pid ", 15);
+        reentrant_write_integer(pid);
+        write(STDOUT_FILENO, " is done: ", 10);
+        write(STDOUT_FILENO, "terminated by signal ", 21);
+        reentrant_write_integer(WTERMSIG(exit_method));
+        write(STDOUT_FILENO, "\n", 1);
+      }
 
     // Foreground process
     } else {
@@ -520,4 +530,40 @@ bool pop_background_process(pid_t process_id) {
   
   free(current_background_process);
   return true;
+}
+
+/*
+ * Function: reentrant_write_integer
+ * -----------------------------------------------------------------------------
+ * A reentrant function that takes an integer as parameter and 
+ *   print it to the terminal.
+ */
+void reentrant_write_integer(int num) {
+
+  // Handle zero
+  if (num == 0) {
+    write(STDOUT_FILENO, "0", 1);
+    return;
+  }
+
+  // Get number of digits
+  int num_digit = 0;
+  int dividend = num;
+  while (dividend > 0) {
+    dividend = (int) (dividend / 10);
+    num_digit += 1;
+  }
+
+  // Create a number string
+  char num_string[num_digit];
+  int index = num_digit - 1;
+  dividend = num;
+  while (index >= 0) {
+    num_string[index] = dividend - (int)(dividend / 10) * 10 + 48;
+    dividend = (int) (dividend / 10);
+    index--;
+  }
+
+  // Write to STDOUT
+  write(STDOUT_FILENO, num_string, num_digit);
 }
