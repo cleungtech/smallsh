@@ -98,6 +98,13 @@ int main(void) {
   sa_sigint.sa_handler = SIG_IGN;
 	sigaction(SIGINT, &sa_sigint, NULL);
 
+  // Handle SIGTSTP
+  sa_sigtstp.sa_handler = handle_sigtstp;
+  sigfillset(&sa_sigtstp.sa_mask);
+  sigdelset(&sa_sigtstp.sa_mask, SIGCHLD);
+  sa_sigtstp.sa_flags = 0;
+  sigaction(SIGTSTP, &sa_sigtstp, NULL);
+
   struct command user_command;
   reset_command(&user_command, true);
   
@@ -159,9 +166,9 @@ int get_command(struct command *user_command) {
       token = strtok_r(NULL, " \n", &save_ptr);
       user_command->output_file = expand_variable(token);
 
-    // Run in the background
+    // Run in the background if the foreground-only mode is off
     } else if (strcmp(token, "&") == 0) {
-      user_command->background = true;
+      user_command->background = !program_status.foreground_only;
 
     // Command arguments
     } else {
@@ -461,6 +468,27 @@ void handle_sigchld(int signal) {
 
       program_status.foreground = 0;
     }
+  }
+}
+
+/*
+ * Function: handle_sigtstp
+ * -----------------------------------------------------------------------------
+ * Listen and handle SIGTSTP signals returned by the terminal.
+ * Toggle foreground-only mode upon receive and display the status
+ *   when there is no foreground process running.
+ */
+void handle_sigtstp(int signal) {
+
+  // Toggle foreground-only mode
+  program_status.foreground_only = !program_status.foreground_only;
+
+  // Display the status foreground-only mode when there is not foreground process.
+  while (program_status.foreground) {};
+  if (program_status.foreground_only) {
+    write(STDOUT_FILENO, "Entering foreground-only mode (& is now ignored)\n", 49);
+  } else {
+    write(STDOUT_FILENO, "Exiting foreground-only mode\n", 29);
   }
 }
 
