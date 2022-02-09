@@ -133,19 +133,19 @@ int get_command(struct command *user_command) {
   if (num_chars == -1)
     clearerr(stdin);
 
-  // Handle comment or blank input
-  bool is_comment = strncmp(input_buffer, "#", 1) == 0;
-  bool is_blank_line = strncmp(input_buffer, "\n", 1) == 0;
-  if (is_comment || is_blank_line) {
-    free(input_buffer);
-    return FAILURE;
-  }
-
   // Parse user input and store information
   int arg_index = 0;
   char *token;
   char *save_ptr = input_buffer;
   token = strtok_r(input_buffer, " \n", &save_ptr);
+
+  // Handle comment or blank input
+  bool is_comment = strncmp(input_buffer, "#", 1) == 0;
+  bool is_blank_line = (bool)!token;
+  if (is_comment || is_blank_line) {
+    free(input_buffer);
+    return FAILURE;
+  }
 
   while (token != NULL) {
 
@@ -171,7 +171,6 @@ int get_command(struct command *user_command) {
     }
     token = strtok_r(NULL, " \n", &save_ptr);
   }
-  
   free(input_buffer);
   return SUCCESS;
 }
