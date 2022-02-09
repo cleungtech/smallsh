@@ -37,7 +37,7 @@ struct command {
 
 /* Struct: process
  * -----------------------------------------------------------------------------
- * Single node of a linked list that represent a single process.
+ * Single node of a linked list that represents a single process.
  *   process_id - the id of the process
  *   next - point to the next node of the process
  */
@@ -58,6 +58,8 @@ struct process {
  *                0 by default.
  *   background - A linked list of background processes that has not
  *                finished or reaped yet.
+ *   foreground_only - if processes should be run in the foreground only.
+ *                     (fg-only mode)
  */
 struct status {
   bool exit_program;
@@ -65,11 +67,14 @@ struct status {
   int kill_signal;
   pid_t foreground;
   struct process *background;
+  bool foreground_only;
 };
 
 /* Global Variable */
-struct status program_status = {false, SUCCESS, 0, 0, NULL};
+struct status program_status = {false, SUCCESS, 0, 0, NULL, false};
 struct sigaction sa_sigint = {0};
+struct sigaction sa_sigtstp = {0};
+struct sigaction sa_sigchld = {0};
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
@@ -80,12 +85,15 @@ void report_status(void);
 void change_directory(struct command *user_command);
 void exit_and_cleanup(struct command *user_command);
 void fork_and_execute(struct command *user_command);
-void handle_sigchld(void);
+void push_background_process(int process_id);
+bool pop_background_process(int process_id);
+void handle_sigchld(int signal);
+void handle_sigtstp(int signal);
 
 /* Main */
 int main(void) {
 
-  // Listen and ignore for SIGCHLD signal
+  // Listen and ignore SIGCHLD
   sa_sigint.sa_handler = SIG_IGN;
 	sigaction(SIGINT, &sa_sigint, NULL);
 
@@ -93,7 +101,7 @@ int main(void) {
   reset_command(&user_command, true);
   
   while (!program_status.exit_program) {
-    
+
     if (get_command(&user_command) == SUCCESS)
       execute_command(&user_command);
   }
@@ -120,7 +128,9 @@ int get_command(struct command *user_command) {
 
   char *input_buffer = (char *)calloc(MAX_COMMAND_LENGTH, sizeof(char));
   size_t input_size = MAX_COMMAND_LENGTH;
-  getline(&input_buffer, &input_size, stdin);
+  int num_chars = getline(&input_buffer, &input_size, stdin);
+  if (num_chars == -1)
+    clearerr(stdin);
 
   // Handle comment or blank input
   bool is_comment = strncmp(input_buffer, "#", 1) == 0;
@@ -328,11 +338,11 @@ void exit_and_cleanup(struct command *user_command) {
  * Take a pointer to user_command as parameter, 
  *   create a child process to execute the arguments
  *   in the background or the foreground based on user input.
- * Also update the last foreground process exit status appropriately.
+ * Also update/add the foreground and background process to program_status.
  */
 void fork_and_execute(struct command *user_command) {
   
-  int child_exit_method;
+  // int child_exit_method;
   pid_t spwan_pid = fork();
 
   switch(spwan_pid) {
@@ -346,11 +356,15 @@ void fork_and_execute(struct command *user_command) {
     // Child process
     case 0:
 
-      // Listen and handle SIGCHLD for foreground process
+      // Only foreground process should listen for SIGINT
       if (!user_command->background) {
         sa_sigint.sa_handler = SIG_DFL;
         sigaction(SIGINT, &sa_sigint, NULL);
       }
+
+      // Both foreground and background processes should ignore SIGTSTP
+      sa_sigtstp.sa_handler = SIG_IGN;
+      sigaction(SIGTSTP, &sa_sigtstp, NULL);
       
       execvp(user_command->arguments[0], user_command->arguments);
       perror(user_command->arguments[0]);
@@ -359,45 +373,29 @@ void fork_and_execute(struct command *user_command) {
     // Parent Process
     default:
 
+      // Listen for SIGCHLD in order to reap zombie processes in the background.
+      sa_sigchld.sa_handler = (void *)handle_sigchld;
+      sigfillset(&sa_sigchld.sa_mask);
+      sa_sigchld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+      sigaction(SIGCHLD, &sa_sigchld, NULL);
+
       // Background process
       if (user_command->background) {
 
         // Adding background pid to program_status
-        struct process *new_background_process = (struct process *)malloc(sizeof(struct process));
-        new_background_process->process_id = spwan_pid;
-        new_background_process->next = program_status.background;
-        program_status.background = new_background_process;
-
+        push_background_process(spwan_pid);
         printf("background pid is %d\n", spwan_pid);
         fflush(stdout);
 
-        waitpid(spwan_pid, &child_exit_method, WNOHANG);
-
-        // Listen for SIGCHLD signal
-        struct sigaction sa_sigchld;
-        sa_sigchld.sa_handler = (void *)handle_sigchld;
-        sigemptyset(&sa_sigchld.sa_mask);
-        sa_sigchld.sa_flags = SA_RESTART | SA_NOCLDSTOP;
-        sigaction(SIGCHLD, &sa_sigchld, NULL);
-        
       // Foreground process
       } else {
-        
+
         // Adding foreground pid to program_status
         program_status.foreground = spwan_pid;
-        waitpid(spwan_pid, &child_exit_method, 0);
 
-        // Normal exit
-        if (WIFEXITED(child_exit_method)) {
-          program_status.exit_status = WEXITSTATUS(child_exit_method);
-          program_status.kill_signal = 0;
-
-        // Exited by interruption
-        } else {
-          program_status.kill_signal = WTERMSIG(child_exit_method);
-          program_status.exit_status = 0;
-          report_status();
-        }
+        // Pause program until the foreground process finishes
+        while (program_status.foreground)
+          pause();
       }
   }
 }
@@ -405,27 +403,121 @@ void fork_and_execute(struct command *user_command) {
 /*
  * Function: handle_sigchld
  * -----------------------------------------------------------------------------
- * Listen and handle SIGCHLD signals returned by the background processes.
- * Also report exit value or termination signals.
+ * Listen and handle SIGCHLD signals returned by 
+ *   both the background and foreground processes.
+ * Also, report and/or update  exit value or termination signals as well as
+ *   updating foreground/background processes in program_status.
  */
-void handle_sigchld(void) {
+void handle_sigchld(int signal) {
+
+  if (signal != SIGCHLD)
+    return;
 
   pid_t pid;
   int exit_method;
+
   while ((pid = waitpid(-1, &exit_method, WNOHANG)) > 0) {
 
     // Background process
-    if (pid != program_status.foreground) {
-      printf("\nbackground pid %d is done: ", pid);
+    if (pop_background_process(pid)) {
 
+      printf("\nbackground pid %d is done: ", pid);
+\ 
       // Normal exit
-      if (WEXITSTATUS(exit_method)) {
+      if (WIFEXITED(exit_method))
         printf("exit value %d\n", WEXITSTATUS(exit_method));
 
       // Exited by interruption
-      } else {
+      if (WIFSIGNALED(exit_method))
         printf("terminated by signal %d\n", WTERMSIG(exit_method));
+
+      char *message = ": ";
+      write(STDOUT_FILENO, message, 3);
+
+    // Foreground process
+    } else {
+
+      // Normal exit
+      if (WIFEXITED(exit_method)) {
+        program_status.exit_status = WEXITSTATUS(exit_method);
+        program_status.kill_signal = 0;
       }
+
+      // Exited by interruption
+      if (WIFSIGNALED(exit_method)) {
+        program_status.kill_signal = WTERMSIG(exit_method);
+        program_status.exit_status = 0;
+        report_status();
+      }
+
+      program_status.foreground = 0;
     }
   }
+}
+
+/*
+ * Function: push_background_process
+ * -----------------------------------------------------------------------------
+ * Takes a background process pid as parameter.
+ * Create a process node with the provided pid and 
+ *   add the node to the end of the background process linked list.
+ */
+void push_background_process(pid_t process_id) {
+
+  // Create new node
+  struct process *new_background_process = (struct process *)malloc(sizeof(struct process));
+  new_background_process->process_id = process_id;
+  new_background_process->next = NULL;
+
+  // Add node to head if not exist
+  if (!program_status.background) {
+    program_status.background = new_background_process;
+    return;
+  }
+
+  // Add node to the last location of the linked list
+  struct process *current_background_process = program_status.background;
+  while (current_background_process->next) {
+    current_background_process = current_background_process->next;
+  }
+
+  current_background_process->next = new_background_process;
+}
+
+/*
+ * Function: pop_background_process
+ * -----------------------------------------------------------------------------
+ * Takes a process pid as parameter.
+ * Remove/free the node from the background process linked list if available.
+ * Return true if the node has been removed from the background processes.
+ * Return false if there is no background processes matching the provided pid.
+ */
+bool pop_background_process(pid_t process_id) {
+
+  // No background processes currently
+  if (!program_status.background) {
+    return false;
+  }
+
+  // Search for matching background proces and remove it
+  struct process *current_background_process = program_status.background;
+  struct process *previous_background_process = NULL;
+  while (current_background_process->process_id != process_id) {
+    previous_background_process = current_background_process;
+    current_background_process = current_background_process->next;
+
+    // process id not found
+    if (!current_background_process)
+      return false;
+  }
+
+  // Deleting the background process
+  if (program_status.background->process_id == process_id) {
+    program_status.background = program_status.background->next;
+  } else {
+    previous_background_process->next = current_background_process->next;
+  }
+  
+  free(current_background_process);
+  return true;
 }
