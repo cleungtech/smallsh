@@ -55,7 +55,7 @@ struct process {
  *   exit_program - whether or not the program should be exited
  *   exit_status - the exit status of the most recent foreground process,
  *                 0 by default or the process was interruped by a signal
- *   kill_signal - the signal that interruped the most recent foreground process,
+ *   kill_signal - the signal interrupting the most recent foreground process,
  *                 0 by default or the process was exited without interruption.
  *   foreground - the process id of the most recent foreground process,
  *                0 by default.
@@ -247,12 +247,15 @@ char *expand_variable(char *unexpanded_string) {
     // Substring on the right of $$
     char expanded_string_right[strlen(current_string) - variable_start - 1];
     strncpy(expanded_string_right, "", sizeof(expanded_string_right));
-    strncpy(expanded_string_right, current_string + variable_start + 2, strlen(current_string) - variable_start - 2);
+    strncpy(expanded_string_right, current_string + variable_start + 2, 
+            strlen(current_string) - variable_start - 2);
 
     // Create expanded string
     int length_expanded_string = strlen(current_string) + num_digits_pid - 1;
-    current_string = realloc(current_string, length_expanded_string * sizeof(char));
-    sprintf(current_string, "%s%d%s", expanded_string_left, getpid(), expanded_string_right);
+    current_string = realloc(current_string, 
+                             length_expanded_string * sizeof(char));
+    sprintf(current_string, "%s%d%s", expanded_string_left, getpid(), 
+            expanded_string_right);
 
     variable_start = strstr(current_string, "$$") - current_string;
   };
@@ -484,10 +487,11 @@ void handle_sigtstp(int signal) {
   // Toggle foreground-only mode
   program_status.foreground_only = !program_status.foreground_only;
 
-  // Display the status foreground-only mode when there is not foreground process.
+  // Display the status fg-only mode when there is not a foreground process.
   while (program_status.foreground) {};
   if (program_status.foreground_only) {
-    write(STDOUT_FILENO, "\nEntering foreground-only mode (& is now ignored)\n", 50);
+    write(STDOUT_FILENO, 
+          "\nEntering foreground-only mode (& is now ignored)\n", 50);
   } else {
     write(STDOUT_FILENO, "\nExiting foreground-only mode\n", 30);
   }
@@ -503,7 +507,8 @@ void handle_sigtstp(int signal) {
 void push_background_process(pid_t process_id) {
 
   // Create new node
-  struct process *new_background_process = (struct process *)malloc(sizeof(struct process));
+  struct process *new_background_process = (struct process *)
+                                           malloc(sizeof(struct process));
   new_background_process->process_id = process_id;
   new_background_process->next = NULL;
 
