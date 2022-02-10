@@ -204,6 +204,7 @@ void reset_command(struct command *user_command, bool initialize) {
     for (int i = 0; i < MAX_ARGS; i++) {
       if (!user_command->arguments[i])
         break;
+
       free(user_command->arguments[i]);
       user_command->arguments[i] = NULL;
     }
@@ -232,7 +233,6 @@ char *expand_variable(char *unexpanded_string) {
 
   int num_digits_pid = floor(log10(getpid())) + 1;
   int variable_start;
-  char *expanded_string = NULL;
   char *current_string = calloc(strlen(unexpanded_string), sizeof(char));
   strcpy(current_string, unexpanded_string);
   variable_start = strstr(current_string, "$$") - current_string;
@@ -251,13 +251,9 @@ char *expand_variable(char *unexpanded_string) {
 
     // Create expanded string
     int length_expanded_string = strlen(current_string) + num_digits_pid - 1;
-    if (expanded_string) {
-      free(expanded_string);
-    }
-    expanded_string = calloc(length_expanded_string, sizeof(char));
-    sprintf(expanded_string, "%s%d%s", expanded_string_left, getpid(), expanded_string_right);
+    current_string = realloc(current_string, length_expanded_string * sizeof(char));
+    sprintf(current_string, "%s%d%s", expanded_string_left, getpid(), expanded_string_right);
 
-    current_string = expanded_string;
     variable_start = strstr(current_string, "$$") - current_string;
   };
   
