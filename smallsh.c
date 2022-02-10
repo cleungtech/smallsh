@@ -75,9 +75,9 @@ struct status {
 
 /* Global Variable */
 struct status program_status = {false, SUCCESS, 0, 0, NULL, false};
-struct sigaction sa_sigint = {0};
-struct sigaction sa_sigtstp = {0};
-struct sigaction sa_sigchld = {0};
+struct sigaction sa_sigint = {{0}};
+struct sigaction sa_sigtstp = {{0}};
+struct sigaction sa_sigchld = {{0}};
 
 /* Function Prototypes */
 int get_command(struct command *user_command);
