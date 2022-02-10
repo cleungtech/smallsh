@@ -171,7 +171,7 @@ int get_command(struct command *user_command) {
       user_command->output_file = expand_variable(token);
 
     // Run in the background if the foreground-only mode is off
-    } else if (strcmp(token, "&") == 0) {
+    } else if (strcmp(token, "&") == 0 && strcmp(save_ptr, "\0") == 0) {
       user_command->background = !program_status.foreground_only;
 
     // Command arguments
@@ -437,25 +437,23 @@ void handle_sigchld(int signal) {
     // Background process
     if (pop_background_process(pid)) {
 
+      // Report exiting background process
+      write(STDOUT_FILENO, "background pid ", 15);
+      write_integer(pid);
+      write(STDOUT_FILENO, " is done: ", 10);
+
       // Normal exit
       if (WIFEXITED(exit_method)) {
-        write(STDOUT_FILENO, "\nbackground pid ", 16);
-        write_integer(pid);
-        write(STDOUT_FILENO, " is done: ", 10);
         write(STDOUT_FILENO, "exit value ", 11);
         write_integer(WEXITSTATUS(exit_method));
-        write(STDOUT_FILENO, "\n: ", 3);
       }
 
       // Exited by interruption
-      if (WIFSIGNALED(exit_method)) {
-        write(STDOUT_FILENO, "background pid ", 15);
-        write_integer(pid);
-        write(STDOUT_FILENO, " is done: ", 10);
+      if (WIFSIGNALED(exit_method)) {      
         write(STDOUT_FILENO, "terminated by signal ", 21);
         write_integer(WTERMSIG(exit_method));
-        write(STDOUT_FILENO, "\n", 1);
       }
+      write(STDOUT_FILENO, "\n", 1);
 
     // Foreground process
     } else {
@@ -644,13 +642,15 @@ bool redirect(struct command *user_command, int mode) {
   // Handle file opening error
 	if (file_pointer == -1) { 
 		printf("cannot open %s for %s\n", filename, mode_string);
+    fflush(stdout);
 		return false;
 	}
 
 	// Redirection to designated file
   int result = dup2(file_pointer, mode);
 	if (result == -1) { 
-		printf("redirection to %s failed\n", filename); 
+		printf("redirection to %s failed\n", filename);
+    fflush(stdout);
 		return false;
 	}
 
