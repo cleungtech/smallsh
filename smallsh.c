@@ -92,7 +92,7 @@ void handle_sigchld(int signal);
 void handle_sigtstp(int signal);
 void push_background_process(int process_id);
 bool pop_background_process(int process_id);
-void reentrant_write_integer(int num);
+void write_integer(int num);
 bool redirect(struct command *user_command, int mode);
 
 /* Main */
@@ -320,11 +320,11 @@ void report_status(void) {
 
   if (program_status.kill_signal) {
     write(STDOUT_FILENO, "terminated by signal ", 21);
-    reentrant_write_integer(program_status.kill_signal);
+    write_integer(program_status.kill_signal);
 
   } else {
     write(STDOUT_FILENO, "exit value ", 11);
-    reentrant_write_integer(program_status.exit_status);
+    write_integer(program_status.exit_status);
   }
 
   write(STDOUT_FILENO, "\n", 1);
@@ -440,20 +440,20 @@ void handle_sigchld(int signal) {
       // Normal exit
       if (WIFEXITED(exit_method)) {
         write(STDOUT_FILENO, "\nbackground pid ", 16);
-        reentrant_write_integer(pid);
+        write_integer(pid);
         write(STDOUT_FILENO, " is done: ", 10);
         write(STDOUT_FILENO, "exit value ", 11);
-        reentrant_write_integer(WEXITSTATUS(exit_method));
+        write_integer(WEXITSTATUS(exit_method));
         write(STDOUT_FILENO, "\n: ", 3);
       }
 
       // Exited by interruption
       if (WIFSIGNALED(exit_method)) {
         write(STDOUT_FILENO, "background pid ", 15);
-        reentrant_write_integer(pid);
+        write_integer(pid);
         write(STDOUT_FILENO, " is done: ", 10);
         write(STDOUT_FILENO, "terminated by signal ", 21);
-        reentrant_write_integer(WTERMSIG(exit_method));
+        write_integer(WTERMSIG(exit_method));
         write(STDOUT_FILENO, "\n", 1);
       }
 
@@ -567,12 +567,12 @@ bool pop_background_process(pid_t process_id) {
 }
 
 /*
- * Function: reentrant_write_integer
+ * Function: write_integer
  * -----------------------------------------------------------------------------
  * A reentrant function that takes an integer as parameter and 
  *   print it to the terminal.
  */
-void reentrant_write_integer(int num) {
+void write_integer(int num) {
 
   // Handle zero
   if (num == 0) {
