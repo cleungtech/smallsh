@@ -9,12 +9,15 @@
 #include <signal.h>
 #include <limits.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 /* Constants */
 #define MAX_COMMAND_LENGTH 2048
 #define MAX_ARGS 512
 #define SUCCESS 0
 #define FAILURE 1
+#define INPUT 0
+#define OUTPUT 1
 
 /* Structs */
 /* Struct: command
@@ -90,6 +93,7 @@ void handle_sigtstp(int signal);
 void push_background_process(int process_id);
 bool pop_background_process(int process_id);
 void reentrant_write_integer(int num);
+bool redirect(struct command *user_command, int mode);
 
 /* Main */
 int main(void) {
@@ -374,6 +378,9 @@ void fork_and_execute(struct command *user_command) {
       // Both foreground and background processes should ignore SIGTSTP
       sa_sigtstp.sa_handler = SIG_IGN;
       sigaction(SIGTSTP, &sa_sigtstp, NULL);
+
+      if (!redirect(user_command, INPUT) || !redirect(user_command, OUTPUT))
+        exit(FAILURE);
       
       execvp(user_command->arguments[0], user_command->arguments);
       perror(user_command->arguments[0]);
@@ -486,9 +493,9 @@ void handle_sigtstp(int signal) {
   // Display the status foreground-only mode when there is not foreground process.
   while (program_status.foreground) {};
   if (program_status.foreground_only) {
-    write(STDOUT_FILENO, "Entering foreground-only mode (& is now ignored)\n", 49);
+    write(STDOUT_FILENO, "\nEntering foreground-only mode (& is now ignored)\n", 50);
   } else {
-    write(STDOUT_FILENO, "Exiting foreground-only mode\n", 29);
+    write(STDOUT_FILENO, "\nExiting foreground-only mode\n", 30);
   }
 }
 
@@ -593,4 +600,59 @@ void reentrant_write_integer(int num) {
 
   // Write to STDOUT
   write(STDOUT_FILENO, num_string, num_digit);
+}
+
+/*
+ * Function: redirect
+ * -----------------------------------------------------------------------------
+ * Takes the user command and redirection mode as parameters.
+ *   Redirect the input or output to the provided filename (if available)
+ *     based on the redirection mode.
+ * If the process is a background process and no filename is given, 
+ *   then the input or output will be redirected to /dev/null
+ */
+bool redirect(struct command *user_command, int mode) {
+
+  // Get filename
+  char *filename;
+  if (mode == INPUT) {
+    filename = user_command->input_file;
+  } else {
+    filename = user_command->output_file;
+  }
+
+  // Handle missing files
+  if (!filename) {
+    if (user_command->background)
+      filename = "/dev/null";
+    else
+      return true;
+  }
+
+	// Get file name and open file
+  int file_pointer;
+  char *mode_string;
+  if (mode == INPUT) {
+    file_pointer = open(filename, O_RDONLY);
+    mode_string = "input";
+
+  } else {
+    file_pointer = open(filename, O_WRONLY | O_CREAT | O_TRUNC , 0644);
+    mode_string = "output";
+  }
+
+  // Handle file opening error
+	if (file_pointer == -1) { 
+		printf("cannot open %s for %s\n", filename, mode_string);
+		return false;
+	}
+
+	// Redirection to designated file
+  int result = dup2(file_pointer, mode);
+	if (result == -1) { 
+		printf("redirection to %s failed\n", filename); 
+		return false;
+	}
+
+  return true;
 }
