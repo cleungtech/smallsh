@@ -98,11 +98,11 @@ bool redirect(struct command *user_command, int mode);
 /* Main */
 int main(void) {
 
-  // Listen and ignore SIGCHLD
+  // Ignore SIGCHLD for the shell
   sa_sigint.sa_handler = SIG_IGN;
 	sigaction(SIGINT, &sa_sigint, NULL);
 
-  // Handle SIGTSTP
+  // Catching SIGTSTP for foreground-only mode
   sa_sigtstp.sa_handler = handle_sigtstp;
   sigfillset(&sa_sigtstp.sa_mask);
   sigdelset(&sa_sigtstp.sa_mask, SIGCHLD);
@@ -200,9 +200,7 @@ void reset_command(struct command *user_command, bool initialize) {
     for (int i = 0; i < MAX_ARGS; i++) {
       user_command->arguments[i] = NULL;
     }
-  }
-  
-  if (!initialize) {
+  } else {
     for (int i = 0; i < MAX_ARGS; i++) {
       if (!user_command->arguments[i])
         break;
@@ -335,14 +333,16 @@ void report_status(void) {
  * -----------------------------------------------------------------------------
  * Take a pointer to user_command as parameter, 
  *   free all allocated memory and kill all child processes.
- * Also take a pointer to exit_program flag as parameter and change it to true.
+ * Also kill and free the memory of all running background processes.
  */
 void exit_and_cleanup(struct command *user_command) {
 
   reset_command(user_command, false);
-  // TO DO: free all background processes in program_status
-  // TO DO: kill all child processes
-  // TO DO: close all file pointers
+
+  while (program_status.background) {
+    kill(program_status.background->process_id, SIGTERM);
+    pop_background_process(program_status.background->process_id);
+  }
 }
 
 /*
@@ -628,31 +628,33 @@ bool redirect(struct command *user_command, int mode) {
   }
 
 	// Get file name and open file
-  int file_pointer;
+  int file_descriptor;
   char *mode_string;
   if (mode == INPUT) {
-    file_pointer = open(filename, O_RDONLY);
+    file_descriptor = open(filename, O_RDONLY);
     mode_string = "input";
 
   } else {
-    file_pointer = open(filename, O_WRONLY | O_CREAT | O_TRUNC , 0644);
+    file_descriptor = open(filename, O_WRONLY | O_CREAT | O_TRUNC , 0644);
     mode_string = "output";
   }
 
   // Handle file opening error
-	if (file_pointer == -1) { 
+	if (file_descriptor == -1) { 
 		printf("cannot open %s for %s\n", filename, mode_string);
     fflush(stdout);
 		return false;
 	}
 
 	// Redirection to designated file
-  int result = dup2(file_pointer, mode);
+  int result = dup2(file_descriptor, mode);
 	if (result == -1) { 
 		printf("redirection to %s failed\n", filename);
     fflush(stdout);
 		return false;
 	}
 
+  // Close file descriptor on when exec is called
+  fcntl(file_descriptor, F_SETFD, FD_CLOEXEC);
   return true;
 }
